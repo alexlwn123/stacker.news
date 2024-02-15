@@ -16,7 +16,15 @@ import { parse } from 'tldts'
 import uu from 'url-unshort'
 import { actSchema, advSchema, bountySchema, commentSchema, discussionSchema, jobSchema, linkSchema, pollSchema, ssValidate } from '../../lib/validate'
 import { sendUserNotification } from '../webPush'
-import { defaultCommentSort, isJob, deleteItemByAuthor, getDeleteCommand, hasDeleteCommand } from '../../lib/item'
+import {
+  defaultCommentSort,
+  isJob,
+  deleteItemByAuthor,
+  hasDeleteCommand,
+  enqueueDeletionJob,
+  prepareScheduleMention,
+  enqueueScheduleJob
+} from '../../lib/item'
 import { notifyItemParents, notifyUserSubscribers, notifyZapped, notifyFounders } from '../../lib/push-notifications'
 import { datePivot, whenRange } from '../../lib/time'
 import { imageFeesInfo, uploadIdsFromText } from './image'
@@ -1297,6 +1305,13 @@ export const updateItem = async (parent, { sub: subName, forward, options, ...it
   item.comments = []
   return item
 }
+const toObject = (text) => {
+  return JSON.parse(JSON.stringify(text, (key, value) =>
+    typeof value === 'bigint'
+      ? value.toString()
+      : value // return everything else unchanged
+  ))
+}
 
 export const createItem = async (parent, { forward, options, ...item }, { me, models, lnd, hash, hmac }) => {
   const spamInterval = me ? ITEM_SPAM_INTERVAL : ANON_ITEM_SPAM_INTERVAL
@@ -1327,6 +1342,17 @@ export const createItem = async (parent, { forward, options, ...item }, { me, mo
     enforceFee += imgFees
   }
 
+  // get scheduled info for creating the item
+  const { text: updatedText, timestamp: scheduledAt } = prepareScheduleMention(item.text)
+  if (scheduledAt) {
+    item.text = updatedText
+    item.scheduledAt = scheduledAt
+    item.isScheduled = true
+  }
+
+  console.log('UPDATED ITEM after prepare', JSON.stringify(toObject(item)))
+
+  // create the item
   item = await serializeInvoicable(
     models.$queryRawUnsafe(
       `${SELECT} FROM create_item($1::JSONB, $2::JSONB, $3::JSONB, '${spamInterval}'::INTERVAL, $4::INTEGER[]) AS "Item"`,
@@ -1334,7 +1360,15 @@ export const createItem = async (parent, { forward, options, ...item }, { me, mo
     { models, lnd, hash, hmac, me, enforceFee }
   )
 
-  await createMentions(item, models)
+  console.log('item after serialize', JSON.stringify(toObject(item)))
+
+  // if this is scheduled post, enqueue the schedule job and do nothing else
+  if (item.scheduledAt) {
+    await enqueueScheduleJob(item, models)
+    return item
+  }
+
+  createMentions(item, models)
 
   await enqueueDeletionJob(item, models)
 
@@ -1348,15 +1382,6 @@ export const createItem = async (parent, { forward, options, ...item }, { me, mo
 
 const clearDeletionJobs = async (item, models) => {
   await models.$queryRawUnsafe(`DELETE FROM pgboss.job WHERE name = 'deleteItem' AND data->>'id' = '${item.id}';`)
-}
-
-const enqueueDeletionJob = async (item, models) => {
-  const deleteCommand = getDeleteCommand(item.text)
-  if (deleteCommand) {
-    await models.$queryRawUnsafe(`
-      INSERT INTO pgboss.job (name, data, startafter)
-      VALUES ('deleteItem', jsonb_build_object('id', ${item.id}), now() + interval '${deleteCommand.number} ${deleteCommand.unit}s');`)
-  }
 }
 
 const getForwardUsers = async (models, forward) => {
@@ -1384,7 +1409,8 @@ export const SELECT =
   "Item"."subName", "Item".status, "Item"."uploadId", "Item"."pollCost", "Item".boost, "Item".msats,
   "Item".ncomments, "Item"."commentMsats", "Item"."lastCommentAt", "Item"."weightedVotes",
   "Item"."weightedDownVotes", "Item".freebie, "Item".bio, "Item"."otsHash", "Item"."bountyPaidTo",
-  ltree2text("Item"."path") AS "path", "Item"."weightedComments", "Item"."imgproxyUrls", "Item".outlawed`
+  ltree2text("Item"."path") AS "path", "Item"."weightedComments", "Item"."imgproxyUrls", "Item".outlawed,
+  "Item"."scheduledAt", "Item"."isScheduled"`
 
 function topOrderByWeightedSats (me, models) {
   return `ORDER BY ${orderByNumerator(models)} DESC NULLS LAST, "Item".id DESC`

@@ -72,6 +72,7 @@ export default gql`
     updatedAt: Date!
     deletedAt: Date
     deleteScheduledAt: Date
+    postScheduledAt: Date
     title: String
     searchTitle: String
     url: String

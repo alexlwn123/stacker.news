@@ -323,6 +323,8 @@ model Item {
   id                 Int                   @id @default(autoincrement())
   createdAt          DateTime              @default(now()) @map("created_at")
   updatedAt          DateTime              @default(now()) @updatedAt @map("updated_at")
+  isScheduled        Boolean               @default(false)
+  scheduledAt        DateTime?
   title              String?
   text               String?
   url                String?

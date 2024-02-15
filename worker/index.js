@@ -23,6 +23,7 @@ import { deleteUnusedImages } from './deleteUnusedImages.js'
 import { territoryBilling } from './territory.js'
 import { ofac } from './ofac.js'
 import { autoWithdraw } from './autowithdraw.js'
+import { postItem } from './scheduledPost.js'
 
 const { loadEnvConfig } = nextEnv
 const { ApolloClient, HttpLink, InMemoryCache } = apolloClient
@@ -96,6 +97,7 @@ async function work () {
   await boss.work('rankViews', jobWrapper(rankViews))
   await boss.work('imgproxy', jobWrapper(imgproxy))
   await boss.work('deleteItem', jobWrapper(deleteItem))
+  await boss.work('postItem', jobWrapper(postItem))
   await boss.work('deleteUnusedImages', jobWrapper(deleteUnusedImages))
   await boss.work('territoryBilling', jobWrapper(territoryBilling))
   await boss.work('ofac', jobWrapper(ofac))
